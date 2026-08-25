@@ -36,12 +36,71 @@ LOG = pathlib.Path("reports/failover-events.jsonl")
 
 def emit(**kw):
     """TODO: append 1 dòng JSONL có ts + iso vào LOG, và print ra stdout."""
-    raise NotImplementedError
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    event = {"ts": time.time(), "iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), **kw}
+    with LOG.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event) + "\n")
+    print(json.dumps(event, ensure_ascii=False))
+    return event
+
+
+def state_of(region: str) -> dict:
+    """Đọc state để event log thể hiện target trước/sau restore."""
+    try:
+        response = httpx.get(f"{URL[region]}/v1/state", timeout=2.0)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as exc:
+        return {"region": region, "state_error": type(exc).__name__}
 
 
 def failover(target: str, backend: str, wait: float) -> dict:
     """TODO: 5 bước ở trên, đúng thứ tự."""
-    raise NotImplementedError
+    if target not in URL:
+        raise ValueError("target phai la a hoac b")
+    primary = "b" if target == "a" else "a"
+    result = {"ok": False, "target": target, "primary": primary}
+
+    emit(step="1_verify_target", target=target, state=state_of(target))
+    try:
+        restored = snapshot.get(target, backend)
+        rpo = snapshot.rpo(pathlib.Path(f"state/region-{primary}/vectors.sqlite"),
+                           pathlib.Path(f"state/region-{target}/vectors.sqlite"))
+        result.update(restored=restored, **rpo)
+        emit(step="2_restore_snapshot", target=target, snapshot_at=restored.get("snapshot_at"),
+             embed_model_version=restored.get("embed_model_version"), **rpo)
+    except (OSError, SystemExit, ValueError) as exc:
+        result["error"] = str(exc)
+        emit(step="2_restore_snapshot", target=target, ok=False, error=str(exc))
+        return result
+
+    pool_file = pathlib.Path(f"state/region-{target}/pool_state")
+    pool_file.parent.mkdir(parents=True, exist_ok=True)
+    pool_file.write_text("full\n", encoding="utf-8")
+    emit(step="3_scale_pool", target=target, pool_state="full")
+
+    deadline, last_reason = time.time() + wait, "not_probed"
+    while time.time() < deadline:
+        try:
+            response = httpx.get(f"{URL[target]}/readyz", timeout=2.0)
+            if response.status_code == 200:
+                waited = round(wait - max(0.0, deadline - time.time()), 2)
+                emit(step="4_wait_ready", target=target, ok=True, waited_s=waited,
+                     state=response.json())
+                break
+            last_reason = f"readyz_{response.status_code}"
+        except httpx.HTTPError as exc:
+            last_reason = type(exc).__name__
+        time.sleep(0.5)
+    else:
+        result["error"] = f"target_not_ready_after_{wait}s:{last_reason}"
+        emit(step="4_wait_ready", target=target, ok=False, waited_s=wait, reason=last_reason)
+        return result
+
+    pathlib.Path("edge/active_region").write_text(target + "\n", encoding="utf-8")
+    emit(step="5_dns_cutover", target=target, active_region=target)
+    result.update(ok=True, cutover=True, target_state=state_of(target))
+    return result
 
 
 if __name__ == "__main__":

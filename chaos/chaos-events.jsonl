@@ -1,0 +1,4 @@
+{"ts": 1787664078.0685787, "iso": "2026-08-25T13:21:18", "action": "kill", "region": "a", "mode": "netblock", "backend": "bare", "mock": true, "other_region": "b", "other_alive": true, "forced_both": false, "note": "t_outage_start \u2014 moc 0 cua RTO clock"}
+{"ts": 1787664111.9447281, "iso": "2026-08-25T13:21:51", "action": "restore", "region": "a", "method": "need_manual_start", "note": "process da bi SIGKILL, chay `make up-bare` lai"}
+{"ts": 1787664117.498742, "iso": "2026-08-25T13:21:57", "action": "restore", "region": "a", "method": "need_manual_start", "note": "process da bi SIGKILL, chay `make up-bare` lai"}
+{"ts": 1787664194.7368095, "iso": "2026-08-25T13:23:14", "action": "kill", "region": "a", "mode": "netblock", "backend": "bare", "mock": true, "other_region": "b", "other_alive": true, "forced_both": false, "note": "t_outage_start \u2014 moc 0 cua RTO clock"}

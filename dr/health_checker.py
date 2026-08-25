@@ -30,12 +30,50 @@ URL = {"a": "http://127.0.0.1:8001", "b": "http://127.0.0.1:8002"}
 
 def probe(region: str, timeout: float) -> tuple[bool, str]:
     """TODO: trả về (ready, reason). Timeout PHẢI có — netblock làm request treo mãi."""
-    raise NotImplementedError
+    try:
+        response = httpx.get(f"{URL[region]}/readyz", timeout=timeout)
+        if response.status_code == 200:
+            return True, "readyz_200"
+        try:
+            detail = response.json().get("reasons", [])
+            return False, f"readyz_{response.status_code}:{','.join(detail)}"
+        except (ValueError, AttributeError):
+            return False, f"readyz_{response.status_code}"
+    except httpx.HTTPError as exc:
+        return False, type(exc).__name__
 
 
 def run(interval: float, timeout: float, threshold: int, duration: float, out: pathlib.Path):
     """TODO: vòng lặp poll + phát hiện transition + ghi JSONL."""
-    raise NotImplementedError
+    if interval <= 0 or timeout <= 0 or threshold < 1 or duration < 0:
+        raise ValueError("interval/timeout phai > 0, threshold phai >= 1, duration phai >= 0")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    states = {region: None for region in URL}
+    consecutive_fails = {region: 0 for region in URL}
+    deadline = time.time() + duration
+
+    with out.open("a", encoding="utf-8") as handle:
+        while time.time() < deadline:
+            started = time.time()
+            for region in URL:
+                ready, reason = probe(region, timeout)
+                consecutive_fails[region] = 0 if ready else consecutive_fails[region] + 1
+                if states[region] is None:
+                    # Trạng thái khởi tạo là baseline, không phải transition cần alert.
+                    states[region] = "HEALTHY"
+                next_state = "HEALTHY" if ready else (
+                    "UNHEALTHY" if consecutive_fails[region] >= threshold else states[region])
+                if next_state is not None and next_state != states[region]:
+                    event = {
+                        "ts": time.time(), "iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                        "event": "state_change", "region": region, "to": next_state,
+                        "reason": reason, "consecutive_fails": consecutive_fails[region],
+                        "interval_s": interval, "threshold": threshold,
+                    }
+                    handle.write(json.dumps(event) + "\n")
+                    handle.flush()
+                    states[region] = next_state
+            time.sleep(max(0.0, interval - (time.time() - started)))
 
 
 if __name__ == "__main__":
